@@ -16,7 +16,14 @@ import { abandonWaits, announcing, changed, until } from '../testing/until';
 import { Redactions } from './redaction';
 import { ServiceNotices } from './service-notices';
 import { connectParent, type ParentChannel } from './session-channel';
-import { parkAfterMs, RESET_HOLD_MS, runSharedHost, sessionBusy } from './shared-host';
+import {
+  parkAfterMs,
+  postedToRoom,
+  postFailure,
+  RESET_HOLD_MS,
+  runSharedHost,
+  sessionBusy,
+} from './shared-host';
 import { hostParked } from './shared-state';
 
 // Every step here writes the session journal and flushes it to disk, and
@@ -1540,3 +1547,32 @@ it('tells the room once when every post of a turn was refused, and not when one 
     expect(await host.stop()).toBeNull();
   }
 }, 20000);
+
+function scriptResult(landed: number, failures: string[]) {
+  return {
+    content: [{ type: 'text', text: 'done' }],
+    structuredContent: { posts_landed: landed, post_failures: failures },
+  };
+}
+
+it('reads a direct post to the room from its result', () => {
+  expect(postedToRoom('post_message', { content: [] })).toBe(true);
+  expect(postFailure('post_message', { isError: true, content: [{ text: '403: no' }] })).toBe(
+    '403: no'
+  );
+  expect(postedToRoom('read_context', { content: [] })).toBe(false);
+});
+
+it("reads a script's posts to the room from the counts in its fields", () => {
+  expect(postedToRoom('run_switch_script', scriptResult(1, []))).toBe(true);
+  expect(postedToRoom('run_switch_script', scriptResult(0, []))).toBe(false);
+  expect(postFailure('run_switch_script', scriptResult(0, []))).toBeNull();
+  expect(postFailure('run_switch_script', scriptResult(1, ['409: first', '409: last']))).toBe(
+    '409: last'
+  );
+});
+
+it('counts no posts for a script result without the counts', () => {
+  expect(postedToRoom('run_switch_script', { content: [] })).toBe(false);
+  expect(postFailure('run_switch_script', { isError: true, content: [] })).toBeNull();
+});

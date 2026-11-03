@@ -69,16 +69,45 @@ describe('an operation call', () => {
 });
 
 describe('the tool catalog', () => {
-  const catalog = new SwitchToolCatalog([
-    { name: 'post_message', description: 'Post.', input_schema: { type: 'object' } },
-  ]);
+  const catalog = new SwitchToolCatalog(
+    [{ name: 'post_message', description: 'Post.', input_schema: { type: 'object' } }],
+    (args) => JSON.parse(JSON.stringify(args).replaceAll('ghs_secret', '[redacted]'))
+  );
 
-  it('lists every operation and the two attachment tools', () => {
+  it('lists every operation, the two attachment tools and the script tool', () => {
     expect(catalog.tools().map((tool) => tool.name)).toEqual([
       'post_message',
       'download_attachment',
       'send_attachment',
+      'run_switch_script',
     ]);
+  });
+
+  it('runs a script as the caller, through the same operation route, with arguments scrubbed', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ result: 'posted' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await catalog.call(context(), 'run_switch_script', {
+      code: "text(await ops.post_message({ body: 'token ' + 'ghs_' + 'secret' }));",
+    });
+    expect(result).toEqual({
+      content: [{ type: 'text', text: 'posted' }],
+      structuredContent: { posts_landed: 1, post_failures: [] },
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://switch.test/agents/agent/ops/post_message');
+    expect(init.headers).toMatchObject({
+      'X-Switch-Connection-Id': 'connection',
+      'X-Switch-Session-Id': 'session',
+    });
+    expect(JSON.parse(init.body as string)).toEqual({ body: 'token [redacted]' });
+  });
+
+  it('refuses a script with no code', async () => {
+    const result = await catalog.call(context(), 'run_switch_script', { code: '  ' });
+    expect(result).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: 'code is required' }],
+    });
   });
 
   it('refuses a tool it does not serve', async () => {

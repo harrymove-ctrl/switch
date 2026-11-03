@@ -60,7 +60,7 @@ export function sessionToolAnswerer(deps: {
   let catalog: Promise<SwitchToolCatalog> | null = null;
   const tools = (): Promise<SwitchToolCatalog> => {
     catalog ??= loadOperations(deps.identity).then(
-      (operations) => new SwitchToolCatalog(operations),
+      (operations) => new SwitchToolCatalog(operations, (args) => deps.redactions.value(args)),
       (error: unknown) => {
         catalog = null;
         throw error;

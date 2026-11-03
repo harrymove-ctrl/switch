@@ -4526,6 +4526,14 @@ The Switch protocol client and MCP runtime
 ### [Unreleased]
 
 #### Added
+- **`run_switch_script`: several Switch calls in one tool call.** The agent
+  writes a short async JavaScript body that calls the reading and posting
+  operations as `ops.<name>(args)` and prints what it wants back; only that
+  output reaches the model. The body runs in QuickJS compiled to
+  WebAssembly, with nothing of the host reachable, and stops with an error at
+  50 calls, 30 seconds, half a second of computing between calls or 20,000
+  characters of output, listing the calls that completed. The session host
+  counts the posts a script made toward the turn's answer.
 - **Waits its turn when Switch is busy opening connections.** A server
   pacing a reconnect storm refuses an open as `busy` with when to open again,
   which is this agent's place in its queue. The stream now waits that long,

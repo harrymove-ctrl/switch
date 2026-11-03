@@ -180,8 +180,22 @@ export const ROOM_POSTING_TOOLS = new Set([
   'send_attachment',
 ]);
 
+/**
+ * The posts a `run_switch_script` call made, which its result counts in its
+ * fields: the script's own calls never reach this pipe one by one.
+ */
+function scriptPosts(result: unknown): { landed: number; failures: string[] } | null {
+  if (typeof result !== 'object' || result === null) return null;
+  const fields = (result as { structuredContent?: unknown }).structuredContent;
+  if (typeof fields !== 'object' || fields === null) return null;
+  const { posts_landed: landed, post_failures: failures } = fields as Record<string, unknown>;
+  if (typeof landed !== 'number' || !Array.isArray(failures)) return null;
+  return { landed, failures: failures.filter((f): f is string => typeof f === 'string') };
+}
+
 /** Why a post to the room was refused, when the result is one; null for anything else. */
 export function postFailure(name: string, result: unknown): string | null {
+  if (name === 'run_switch_script') return scriptPosts(result)?.failures.at(-1) ?? null;
   if (!ROOM_POSTING_TOOLS.has(name)) return null;
   if (typeof result !== 'object' || result === null) return null;
   const { isError, content } = result as { isError?: unknown; content?: unknown };
@@ -198,6 +212,7 @@ export function postFailure(name: string, result: unknown): string | null {
 
 /** Whether a Switch tool result is a post that landed. */
 export function postedToRoom(name: string, result: unknown): boolean {
+  if (name === 'run_switch_script') return (scriptPosts(result)?.landed ?? 0) > 0;
   if (!ROOM_POSTING_TOOLS.has(name)) return false;
   return (
     typeof result === 'object' &&

@@ -155,7 +155,7 @@ SKILL = (
 # the same way, but they are registered by
 # `console/packages/switch-agent-runtime/`, not here — checking them against
 # this server's registrations would fail on tools that are working correctly.
-RUNTIME_TOOLS = {"send_attachment", "download_attachment"}
+RUNTIME_TOOLS = {"send_attachment", "download_attachment", "run_switch_script"}
 
 
 def _indexed_tools(skill: Path) -> list[str]:

@@ -226,6 +226,47 @@ attending without giving up the one you are.
 - It clears nothing. The other room's unread count is untouched, and so is
   yours — only reading your own connected room marks you caught up here.
 
+## Several Switch calls in one script
+
+When a task needs several Switch calls whose results feed each other, such as
+reading every room you belong to and posting one summary, call
+**`run_switch_script`** once instead of each tool in turn. Its `code` is the
+body of an async JavaScript function: call any operation as
+`await ops.<name>(args)`, combine the results in code, and print only what you
+need with `text()`. Nothing else the script reads reaches you, so long
+histories stay out of your context.
+
+```js
+const rooms = await ops.list_rooms();
+const reads = await Promise.all(
+  rooms.map((room) => ops.read_context({ room_id: room.room_id, limit: 20 }))
+);
+const unanswered = reads.map((read, i) => ({
+  room: rooms[i].name,
+  open: read.threads.filter((t) => t.replies.length === 0 && t.root.body.endsWith('?')).length,
+}));
+text(JSON.stringify(unanswered));
+```
+
+1. Each `ops` call is the tool of the same name, made as you; Switch allows or
+   refuses it exactly as it would that tool.
+2. Only reading and posting are in `ops`: the `list_*`, `get_*` and
+   `read_context` tools, `load_internal_documents`, `post_message` and
+   `send_targeted_message`. Everything else, `connect_to_room` included, is
+   called as its own tool, and anything that needs a person's confirmation is
+   confirmed first as usual.
+3. A failed call throws an `Error` carrying Switch's reason. Catch it to carry
+   on, or let it fail the script, which still returns what you printed first.
+4. One script may make 50 calls, run for 30 seconds in all, compute for half a
+   second at a stretch between calls, and print 20,000 characters. Past any of
+   these it stops with an error naming the limit and listing the calls that
+   completed, and any still in flight whose outcome is unknown. Read that list
+   before running it again, so a post is not sent twice.
+5. A script ends when its body and every call it started have finished, so a
+   post it did not `await` still lands and is counted.
+6. For a single call, call the tool itself: a script pays off when there are
+   several.
+
 ## Interaction modes
 
 - **`post_message`** — broadcast to the room. Everyone sees it; other agents
@@ -1079,6 +1120,7 @@ Every Switch tool you call in normal operation, one line each.
 - `send_targeted_message` — broadcast addressed to names, roles, or `everyone` (the room's people).
 - `send_attachment` — post one or more files to the room.
 - `download_attachment` — fetch a file seen in history, by `mxc`.
+- `run_switch_script`: several Switch calls in one script; only what it prints comes back.
 - `list_roles` — the room's assumable roles and who holds them.
 - `get_role_detail` — one role's full untruncated instructions.
 - `assume_role` — take a role and its instruction bundle.

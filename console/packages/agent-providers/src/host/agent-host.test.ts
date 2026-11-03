@@ -955,6 +955,7 @@ it('answers its sessions’ tool calls as the calling session, placing the room 
       'post_message',
       'download_attachment',
       'send_attachment',
+      'run_switch_script',
     ]);
 
     // Refused by Switch: the room stays with the session that had it.

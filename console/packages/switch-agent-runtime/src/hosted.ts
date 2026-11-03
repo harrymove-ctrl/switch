@@ -19,6 +19,12 @@ import * as path from 'node:path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  RUN_SWITCH_SCRIPT_TOOL_NAME,
+  runSwitchScript,
+  runSwitchScriptTool,
+  SCRIPT_LIMITS,
+} from './script-tool';
 
 export { SESSION_SELECTOR_HEADERS } from './session-selector';
 
@@ -236,12 +242,17 @@ export const SEND_ATTACHMENT_TOOL: ToolDefinition = {
 };
 
 /**
- * The tools a catalog of operations is served as: every operation, and the
- * two attachment tools, which are not operations because they move bytes
- * between the session's machine and the room.
+ * The tools a catalog of operations is served as: every operation, the two
+ * attachment tools, which are not operations because they move bytes between
+ * the session's machine and the room, and `run_switch_script`, which runs
+ * several operations in one call. `redact` scrubs secrets from the arguments
+ * of each operation a script calls, as the host scrubs those of a tool call.
  */
 export class SwitchToolCatalog {
-  constructor(readonly operations: SwitchOperation[]) {}
+  constructor(
+    readonly operations: SwitchOperation[],
+    private readonly redact: (args: Record<string, unknown>) => Record<string, unknown>
+  ) {}
 
   tools(): ToolDefinition[] {
     return [
@@ -252,6 +263,7 @@ export class SwitchToolCatalog {
       })),
       DOWNLOAD_ATTACHMENT_TOOL,
       SEND_ATTACHMENT_TOOL,
+      runSwitchScriptTool(this.operations),
     ];
   }
 
@@ -259,6 +271,7 @@ export class SwitchToolCatalog {
     return (
       name === DOWNLOAD_ATTACHMENT_TOOL.name ||
       name === SEND_ATTACHMENT_TOOL.name ||
+      name === RUN_SWITCH_SCRIPT_TOOL_NAME ||
       this.operations.some((op) => op.name === name)
     );
   }
@@ -267,6 +280,17 @@ export class SwitchToolCatalog {
   async call(ctx: CallerContext, name: string, args: Record<string, unknown>): Promise<ToolResult> {
     if (name === DOWNLOAD_ATTACHMENT_TOOL.name) return downloadAttachmentTool(ctx, args);
     if (name === SEND_ATTACHMENT_TOOL.name) return sendAttachmentTool(ctx, args);
+    if (name === RUN_SWITCH_SCRIPT_TOOL_NAME) {
+      if (typeof args.code !== 'string' || !args.code.trim()) {
+        return { isError: true, content: [{ type: 'text', text: 'code is required' }] };
+      }
+      return runSwitchScript(
+        args.code,
+        this.operations,
+        SCRIPT_LIMITS,
+        (operation, operationArgs) => requestOperation(ctx, operation, this.redact(operationArgs))
+      );
+    }
     if (this.operations.some((op) => op.name === name)) return callOperation(ctx, name, args);
     throw new Error(`Unknown tool: ${name}`);
   }
@@ -286,12 +310,15 @@ export function isDeadConnection(connectionId: string, status: number, body: str
   return body.includes(connectionId) && body.includes('is not open');
 }
 
+/** What one operation came back with: its result, or the words for why it failed. */
+export type OperationOutcome = { ok: true; result: unknown } | { ok: false; error: string };
+
 /** One operation, `POST /agents/{id}/ops/{name}`, as the caller. */
-export async function callOperation(
+export async function requestOperation(
   ctx: CallerContext,
   name: string,
   args: Record<string, unknown>
-): Promise<ToolResult> {
+): Promise<OperationOutcome> {
   const { identity } = ctx;
   try {
     const resp = await fetch(`${identity.endpoint}/agents/${identity.agentId}/ops/${name}`, {
@@ -307,29 +334,40 @@ export async function callOperation(
     const text = await resp.text();
     if (!resp.ok) {
       if (isDeadConnection(ctx.connectionId, resp.status, text)) {
-        return { isError: true, content: [{ type: 'text', text: ctx.deadConnection(name) }] };
+        return { ok: false, error: ctx.deadConnection(name) };
       }
-      return { isError: true, content: [{ type: 'text', text: `${resp.status}: ${text}` }] };
+      return { ok: false, error: `${resp.status}: ${text}` };
     }
     const data = JSON.parse(text) as { result?: unknown };
-    const result = data.result ?? null;
-    return {
-      content: [
-        {
-          type: 'text',
-          text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
-        },
-      ],
-      // Object results are also returned as structured content: hosts read the
-      // tool's *fields* from it (room_id and agent_id off connect_to_room), and
-      // text alone leaves them with a blob they cannot address.
-      ...(result !== null && typeof result === 'object' && !Array.isArray(result)
-        ? { structuredContent: result as Record<string, unknown> }
-        : {}),
-    };
+    return { ok: true, result: data.result ?? null };
   } catch (err) {
-    return { isError: true, content: [{ type: 'text', text: `${name} failed: ${err}` }] };
+    return { ok: false, error: `${name} failed: ${err}` };
   }
+}
+
+/** One operation as a tool call: its result as text, and as fields when it is an object. */
+export async function callOperation(
+  ctx: CallerContext,
+  name: string,
+  args: Record<string, unknown>
+): Promise<ToolResult> {
+  const outcome = await requestOperation(ctx, name, args);
+  if (!outcome.ok) return { isError: true, content: [{ type: 'text', text: outcome.error }] };
+  const { result } = outcome;
+  return {
+    content: [
+      {
+        type: 'text',
+        text: typeof result === 'string' ? result : JSON.stringify(result, null, 2),
+      },
+    ],
+    // Object results are also returned as structured content: hosts read the
+    // tool's *fields* from it (room_id and agent_id off connect_to_room), and
+    // text alone leaves them with a blob they cannot address.
+    ...(result !== null && typeof result === 'object' && !Array.isArray(result)
+      ? { structuredContent: result as Record<string, unknown> }
+      : {}),
+  };
 }
 
 // -- Attachments --------------------------------------------------------------
